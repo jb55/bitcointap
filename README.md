@@ -1,6 +1,18 @@
 # bitcointap
 
-A tool for tapping into bitcoin-core tracepoints to extract data in realtime
+A rust library and cli tool for tapping into bitcoin-core tracepoints to
+extract data in realtime.
+
+## Status
+
+This is current WORK IN PROGRESS. It does not work yet.
+
+- [ ] cli tool with json events
+- [ ] event selection api
+- [ ] event selection from cli
+- [ ] switch from nats to mpsc channel
+- [ ] json logger from channel
+- [ ] msgpack logger from channel
 
 ## Usage
 
