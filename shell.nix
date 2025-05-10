@@ -6,22 +6,22 @@ pkgs.mkShell {
 
     hardeningDisable = [ "stackprotector" "fortify" ];
 
-    buildInputs = [
-      pkgs.rustc
-      pkgs.cargo
-      pkgs.cmake
-      pkgs.protobuf
+    buildInputs = with pkgs; [
+      #rustc
+      #cargo
+      cmake
+      protobuf
 
-      pkgs.rustfmt
+      rustfmt
 
-      pkgs.bpftools
+      bpftools
 
       # libbpf CO-RE pkgs
-      pkgs.clang_14
-      pkgs.llvm
-      pkgs.elfutils
-      pkgs.zlib
-      pkgs.pkg-config
-      pkgs.which
+      clang_14
+      llvm
+      elfutils
+      zlib
+      pkg-config
+      which
     ];
 }

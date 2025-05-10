@@ -1,9 +1,9 @@
 [workspace]
-
 resolver = "2"
+default-members = ["bitcointap"]
 members = [
   "shared",
-  "extractor",
+  "bitcointap",
   "tools/logger",
   "tools/websocket",
   "tools/metrics",
