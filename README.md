@@ -25,6 +25,12 @@ The Bitcoin P2P protocol messages are deserialized using [rust-bitcoin].
 └───────────┘          └────────────┘
 ```
 
+## Credits
+
+Most of the hard work here was done by @0xb10c's [peer-observer]. I am simply
+swapping out the protobuf and nats code with json and stdout.
+
+[peer-observer]: https://github.com/0xB10C/peer-observer
 [msgpack]: https://msgpack.org/
 [libbpf-rs]: https://github.com/libbpf/libbpf-rs
 [rust-bitcoin]: https://github.com/rust-bitcoin/rust-bitcoin
