@@ -196,10 +196,13 @@ dependencies = [
 name = "bitcointap"
 version = "0.1.0"
 dependencies = [
+ "clap",
  "libbpf-cargo",
  "libbpf-rs",
  "prost 0.13.5",
+ "serde_json",
  "shared",
+ "simple_logger",
 ]
 
 [[package]]

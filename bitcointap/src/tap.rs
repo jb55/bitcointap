@@ -1,18 +1,18 @@
 use crate::{
-    AddrmanEvent, AddrmanMsg, ConnectionEvent, ConnectionMsg, Event, EventMsg, MempoolEvent,
-    MempoolMsg, RuntimeError, TRACEPOINTS_ADDRMAN, TRACEPOINTS_MEMPOOL, TRACEPOINTS_NET_CONN,
-    TRACEPOINTS_NET_MESSAGE, TRACEPOINTS_VALIDATION, ValidationEvent, ValidationMsg, tracing,
+    ConnectionEvent, ConnectionMsg, Event, EventMsg, MempoolEvent, MempoolMsg, RuntimeError,
+    TRACEPOINTS_MEMPOOL, TRACEPOINTS_NET_CONN, TRACEPOINTS_NET_MESSAGE, TRACEPOINTS_VALIDATION,
+    ValidationEvent, ValidationMsg, tracing,
 };
 use libbpf_rs::skel::{OpenSkel, Skel, SkelBuilder};
 use libbpf_rs::{Map, MapCore, Object, ProgramMut, RingBufferBuilder};
 use shared::ctypes::{
-    AddrmanInsertNew, AddrmanInsertTried, ClosedConnection, InboundConnection, MempoolAdded,
-    MempoolRejected, MempoolRemoved, MempoolReplaced, MisbehavingConnection, OutboundConnection,
-    P2PMessage, ValidationBlockConnected,
+    ClosedConnection, InboundConnection, MempoolAdded, MempoolRejected, MempoolRemoved,
+    MempoolReplaced, MisbehavingConnection, OutboundConnection, P2PMessage,
+    ValidationBlockConnected,
 };
 use shared::log::{self};
 //use shared::simple_logger;
-use shared::{addrman, mempool, net_msg};
+use shared::{mempool, net_msg};
 use std::fs::File;
 use std::io::{BufReader, Read};
 use std::mem::MaybeUninit;
@@ -28,7 +28,6 @@ const RINGBUFF_CALLBACK_UNABLE_TO_PARSE_P2P_MSG: i32 = -20;
 
 const NO_EVENTS_ERROR_DURATION: Duration = Duration::from_secs(60 * 3);
 const NO_EVENTS_WARN_DURATION: Duration = Duration::from_secs(60 * 1);
-
 const DEFAULT_PID: i32 = -1;
 
 pub struct BitcoinTap {
@@ -51,6 +50,7 @@ pub struct BitcoinTap {
 }
 
 /// Used to specify where to source bitcoind's `pid` from
+#[derive(Debug)]
 pub enum PidSource {
     Manual(i32),
     File(PathBuf),
@@ -91,6 +91,11 @@ impl BitcoinTap {
         }
     }
 
+    /// The event stream
+    pub fn events(&mut self) -> &mut Receiver<EventMsg> {
+        &mut self.rx
+    }
+
     /// Declare the pid source. This is used on [`Self::attach`]
     pub fn pid_source(mut self, source: PidSource) -> Self {
         self.pid_source = source;
@@ -104,11 +109,7 @@ impl BitcoinTap {
     }
 
     /// Attach to the process and start reading events
-    pub fn attach(&mut self) -> Result<(), RuntimeError> {
-        //let args = Args::parse();
-
-        //simple_logger::init_with_level(args.log_level)?;
-
+    pub fn attach(mut self) -> Result<Self, RuntimeError> {
         let pid = bitcoind_pid(&self.pid_source)?;
 
         let mut skel_builder = tracing::TracingSkelBuilder::default();
@@ -236,6 +237,7 @@ impl BitcoinTap {
         }
 
         // addrman tracepoints
+        /*
         let map_addrman_insert_new = find_map(&obj, "addrman_insert_new")?;
         let map_addrman_insert_tried = find_map(&obj, "addrman_insert_tried")?;
         {
@@ -252,10 +254,11 @@ impl BitcoinTap {
                 handle_addrman_tried(data, &mut tx2)
             })?;
         }
+        */
 
         if active_tracepoints.is_empty() {
             log::error!("No tracepoints enabled.");
-            return Ok(());
+            return Ok(self);
         }
 
         // attach tracepoints
@@ -335,9 +338,11 @@ impl BitcoinTap {
                     );
                 }
             }
+
+            log::info!("Exiting event polling loop");
         });
 
-        Ok(())
+        Ok(self)
     }
 }
 
@@ -444,6 +449,7 @@ fn handle_net_message(data: &[u8], tx: &mpsc::Sender<EventMsg>) -> i32 {
     )
 }
 
+/*
 fn handle_addrman_new(data: &[u8], tx: &mut mpsc::Sender<EventMsg>) -> i32 {
     let new = AddrmanInsertNew::from_bytes(data);
     tx.send(EventMsg::new(Event::Addrman(AddrmanMsg {
@@ -465,6 +471,7 @@ fn handle_addrman_tried(data: &[u8], tx: &mut mpsc::Sender<EventMsg>) -> i32 {
         |_| RINGBUFF_CALLBACK_PUBLISH_ERROR,
     )
 }
+*/
 
 fn handle_mempool_added(data: &[u8], tx: &mut mpsc::Sender<EventMsg>) -> i32 {
     let added = MempoolAdded::from_bytes(data);
