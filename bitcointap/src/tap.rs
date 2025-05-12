@@ -256,6 +256,7 @@ impl BitcoinTap {
         }
         */
 
+        log::info!("active tracepoints: {:?}", &active_tracepoints);
         if active_tracepoints.is_empty() {
             log::error!("No tracepoints enabled.");
             return Ok(self);
@@ -276,7 +277,6 @@ impl BitcoinTap {
             );
         }
 
-        let ring_buffers = ringbuff_builder.build()?;
         log::info!(
             "Startup successful. Starting to extract events from '{}'..",
             self.path.display()
@@ -285,6 +285,7 @@ impl BitcoinTap {
         let mut has_warned_about_no_events = false;
         let (quit_tx, quit_rx) = mpsc::channel();
         self.quit_tx = Some(quit_tx);
+        let ring_buffers = ringbuff_builder.build()?;
 
         std::thread::spawn(move || {
             // TODO: epoll async somehow ?
@@ -380,21 +381,18 @@ fn handle_net_conn_closed(data: &[u8], tx: &mut mpsc::Sender<EventMsg>) -> i32 {
     tx.send(EventMsg::new(Event::Conn(ConnectionMsg {
         event: Some(ConnectionEvent::Closed(closed.into())),
     })))
-    .map_or_else(
-        |_| RINGBUFF_CALLBACK_OK,
-        |_| RINGBUFF_CALLBACK_PUBLISH_ERROR,
-    )
+    .map_or(RINGBUFF_CALLBACK_PUBLISH_ERROR, |_| RINGBUFF_CALLBACK_OK)
 }
 
 fn handle_net_conn_outbound(data: &[u8], tx: &mut mpsc::Sender<EventMsg>) -> i32 {
+    log::info!("outbound conn!!");
     let outbound = OutboundConnection::from_bytes(data);
     tx.send(EventMsg::new(Event::Conn(ConnectionMsg {
         event: Some(ConnectionEvent::Outbound(outbound.into())),
     })))
-    .map_or_else(
-        |_| RINGBUFF_CALLBACK_OK,
-        |_| RINGBUFF_CALLBACK_PUBLISH_ERROR,
-    )
+    .map_or(RINGBUFF_CALLBACK_PUBLISH_ERROR, |_| {
+        RINGBUFF_CALLBACK_PUBLISH_ERROR
+    })
 }
 
 fn handle_net_conn_inbound(data: &[u8], tx: &mut mpsc::Sender<EventMsg>) -> i32 {
@@ -402,10 +400,7 @@ fn handle_net_conn_inbound(data: &[u8], tx: &mut mpsc::Sender<EventMsg>) -> i32 
     tx.send(EventMsg::new(Event::Conn(ConnectionMsg {
         event: Some(ConnectionEvent::Inbound(inbound.into())),
     })))
-    .map_or_else(
-        |_| RINGBUFF_CALLBACK_OK,
-        |_| RINGBUFF_CALLBACK_PUBLISH_ERROR,
-    )
+    .map_or(RINGBUFF_CALLBACK_PUBLISH_ERROR, |_| RINGBUFF_CALLBACK_OK)
 }
 
 fn handle_net_conn_inbound_evicted(data: &[u8], tx: &mut mpsc::Sender<EventMsg>) -> i32 {
@@ -413,10 +408,7 @@ fn handle_net_conn_inbound_evicted(data: &[u8], tx: &mut mpsc::Sender<EventMsg>)
     tx.send(EventMsg::new(Event::Conn(ConnectionMsg {
         event: Some(ConnectionEvent::InboundEvicted(evicted.into())),
     })))
-    .map_or_else(
-        |_| RINGBUFF_CALLBACK_OK,
-        |_| RINGBUFF_CALLBACK_PUBLISH_ERROR,
-    )
+    .map_or(RINGBUFF_CALLBACK_PUBLISH_ERROR, |_| RINGBUFF_CALLBACK_OK)
 }
 
 fn handle_net_conn_misbehaving(data: &[u8], tx: &mpsc::Sender<EventMsg>) -> i32 {
@@ -424,10 +416,7 @@ fn handle_net_conn_misbehaving(data: &[u8], tx: &mpsc::Sender<EventMsg>) -> i32 
     tx.send(EventMsg::new(Event::Conn(ConnectionMsg {
         event: Some(ConnectionEvent::Misbehaving(misbehaving.into())),
     })))
-    .map_or_else(
-        |_| RINGBUFF_CALLBACK_OK,
-        |_| RINGBUFF_CALLBACK_PUBLISH_ERROR,
-    )
+    .map_or(RINGBUFF_CALLBACK_PUBLISH_ERROR, |_| RINGBUFF_CALLBACK_OK)
 }
 
 fn handle_net_message(data: &[u8], tx: &mpsc::Sender<EventMsg>) -> i32 {
@@ -443,10 +432,7 @@ fn handle_net_message(data: &[u8], tx: &mpsc::Sender<EventMsg>) -> i32 {
         meta: message.meta.create_protobuf_metadata(),
         msg: Some(protobuf_message),
     })))
-    .map_or_else(
-        |_| RINGBUFF_CALLBACK_OK,
-        |_| RINGBUFF_CALLBACK_PUBLISH_ERROR,
-    )
+    .map_or(RINGBUFF_CALLBACK_PUBLISH_ERROR, |_| RINGBUFF_CALLBACK_OK)
 }
 
 /*
@@ -455,9 +441,9 @@ fn handle_addrman_new(data: &[u8], tx: &mut mpsc::Sender<EventMsg>) -> i32 {
     tx.send(EventMsg::new(Event::Addrman(AddrmanMsg {
         event: Some(AddrmanEvent::New(new.into())),
     })))
-    .map_or_else(
+    .map_or(
+        RINGBUFF_CALLBACK_PUBLISH_ERROR,
         |_| RINGBUFF_CALLBACK_OK,
-        |_| RINGBUFF_CALLBACK_PUBLISH_ERROR,
     )
 }
 
@@ -466,9 +452,9 @@ fn handle_addrman_tried(data: &[u8], tx: &mut mpsc::Sender<EventMsg>) -> i32 {
     tx.send(EventMsg::new(Event::Addrman(addrman::AddrmanEvent {
         event: Some(addrman::addrman_event::Event::Tried(tried.into())),
     })))
-    .map_or_else(
+    .map_or(
+        RINGBUFF_CALLBACK_PUBLISH_ERROR,
         |_| RINGBUFF_CALLBACK_OK,
-        |_| RINGBUFF_CALLBACK_PUBLISH_ERROR,
     )
 }
 */
@@ -478,10 +464,7 @@ fn handle_mempool_added(data: &[u8], tx: &mut mpsc::Sender<EventMsg>) -> i32 {
     tx.send(EventMsg::new(Event::Mempool(MempoolMsg {
         event: Some(MempoolEvent::Added(added.into())),
     })))
-    .map_or_else(
-        |_| RINGBUFF_CALLBACK_OK,
-        |_| RINGBUFF_CALLBACK_PUBLISH_ERROR,
-    )
+    .map_or(RINGBUFF_CALLBACK_PUBLISH_ERROR, |_| RINGBUFF_CALLBACK_OK)
 }
 
 fn handle_mempool_removed(data: &[u8], tx: &mut mpsc::Sender<EventMsg>) -> i32 {
@@ -489,10 +472,7 @@ fn handle_mempool_removed(data: &[u8], tx: &mut mpsc::Sender<EventMsg>) -> i32 {
     tx.send(EventMsg::new(Event::Mempool(MempoolMsg {
         event: Some(MempoolEvent::Removed(removed.into())),
     })))
-    .map_or_else(
-        |_| RINGBUFF_CALLBACK_OK,
-        |_| RINGBUFF_CALLBACK_PUBLISH_ERROR,
-    )
+    .map_or(RINGBUFF_CALLBACK_PUBLISH_ERROR, |_| RINGBUFF_CALLBACK_OK)
 }
 
 fn handle_mempool_replaced(data: &[u8], tx: &mut mpsc::Sender<EventMsg>) -> i32 {
@@ -500,10 +480,7 @@ fn handle_mempool_replaced(data: &[u8], tx: &mut mpsc::Sender<EventMsg>) -> i32 
     tx.send(EventMsg::new(Event::Mempool(mempool::MempoolEvent {
         event: Some(mempool::mempool_event::Event::Replaced(replaced.into())),
     })))
-    .map_or_else(
-        |_| RINGBUFF_CALLBACK_OK,
-        |_| RINGBUFF_CALLBACK_PUBLISH_ERROR,
-    )
+    .map_or(RINGBUFF_CALLBACK_PUBLISH_ERROR, |_| RINGBUFF_CALLBACK_OK)
 }
 
 fn handle_mempool_rejected(data: &[u8], tx: &mut Sender<EventMsg>) -> i32 {
@@ -511,10 +488,7 @@ fn handle_mempool_rejected(data: &[u8], tx: &mut Sender<EventMsg>) -> i32 {
     tx.send(EventMsg::new(Event::Mempool(MempoolMsg {
         event: Some(MempoolEvent::Rejected(rejected.into())),
     })))
-    .map_or_else(
-        |_| RINGBUFF_CALLBACK_OK,
-        |_| RINGBUFF_CALLBACK_PUBLISH_ERROR,
-    )
+    .map_or(RINGBUFF_CALLBACK_PUBLISH_ERROR, |_| RINGBUFF_CALLBACK_OK)
 }
 
 fn handle_validation_block_connected(data: &[u8], tx: &mut mpsc::Sender<EventMsg>) -> i32 {
@@ -522,10 +496,7 @@ fn handle_validation_block_connected(data: &[u8], tx: &mut mpsc::Sender<EventMsg
     tx.send(EventMsg::new(Event::Validation(ValidationMsg {
         event: Some(ValidationEvent::BlockConnected(connected.into())),
     })))
-    .map_or_else(
-        |_| RINGBUFF_CALLBACK_OK,
-        |_| RINGBUFF_CALLBACK_PUBLISH_ERROR,
-    )
+    .map_or(RINGBUFF_CALLBACK_PUBLISH_ERROR, |_| RINGBUFF_CALLBACK_OK)
 }
 
 /// Find the BPF program with the given name

@@ -1,5 +1,6 @@
 
 /// Tracepoint entry information
+#[derive(Debug)]
 pub struct Tracepoint<'a> {
     pub context: &'a str,
     pub name: &'a str,
