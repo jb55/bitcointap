@@ -390,9 +390,7 @@ fn handle_net_conn_outbound(data: &[u8], tx: &mut mpsc::Sender<EventMsg>) -> i32
     tx.send(EventMsg::new(Event::Conn(ConnectionMsg {
         event: Some(ConnectionEvent::Outbound(outbound.into())),
     })))
-    .map_or(RINGBUFF_CALLBACK_PUBLISH_ERROR, |_| {
-        RINGBUFF_CALLBACK_PUBLISH_ERROR
-    })
+    .map_or(RINGBUFF_CALLBACK_PUBLISH_ERROR, |_| RINGBUFF_CALLBACK_OK)
 }
 
 fn handle_net_conn_inbound(data: &[u8], tx: &mut mpsc::Sender<EventMsg>) -> i32 {
