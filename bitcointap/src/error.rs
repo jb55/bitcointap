@@ -14,6 +14,7 @@ pub enum RuntimeError {
     IntParse(ParseIntError),
     SystemTime(SystemTimeError),
     SetLogger(SetLoggerError),
+    MissingBitcoind,
 }
 
 impl fmt::Display for RuntimeError {
@@ -25,6 +26,7 @@ impl fmt::Display for RuntimeError {
             RuntimeError::SystemTime(e) => write!(f, "system time error {}", e),
             RuntimeError::SetLogger(e) => write!(f, "set logger error {}", e),
             RuntimeError::NoSuchBPFMap(map) => write!(f, "could not find the BPF map {}", map),
+            RuntimeError::MissingBitcoind => write!(f, "Could not find bitcoind"),
             RuntimeError::NoSuchBPFProg(prog) => {
                 write!(f, "could not find the BPF program {}", prog)
             }
@@ -42,6 +44,7 @@ impl error::Error for RuntimeError {
             RuntimeError::SetLogger(ref e) => Some(e),
             RuntimeError::NoSuchBPFMap(_) => None,
             RuntimeError::NoSuchBPFProg(_) => None,
+            RuntimeError::MissingBitcoind => None,
         }
     }
 }
