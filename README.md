@@ -8,8 +8,8 @@ extract data in realtime.
 This is current WORK IN PROGRESS. It does not work yet.
 
 - [x] switch from nats to mpsc channel
-- [ ] cli tool with json events
-- [ ] json logger from channel
+- [x] cli tool with json events
+- [x] json logger from channel
 - [ ] event selection api
 - [ ] event selection from cli
 - [ ] msgpack logger from channel
