@@ -39,9 +39,6 @@ pub struct BitcoinTap {
     /// All tapped events are sent over this channel
     tx: Sender<EventMsg>,
 
-    /// Write to this to shut down the ringbuffer polling thread
-    quit_tx: Option<Sender<()>>,
-
     /// Do we have libbpf debugging enabled ?
     debug: bool,
 
@@ -63,15 +60,6 @@ impl Default for PidSource {
     }
 }
 
-impl Drop for BitcoinTap {
-    fn drop(&mut self) {
-        // send close signal to thread if we have one
-        if let Some(quit_tx) = &self.quit_tx {
-            let _ = quit_tx.send(());
-        }
-    }
-}
-
 impl BitcoinTap {
     /// Create a new bitcoin tap. Attach by calling [`Self::attach`]
     pub fn new(path: impl AsRef<Path>) -> Self {
@@ -79,7 +67,6 @@ impl BitcoinTap {
         let path: PathBuf = path.as_ref().to_owned();
         let debug = false;
         let pid_source = PidSource::default();
-        let quit_tx = None;
 
         Self {
             tx,
@@ -87,7 +74,6 @@ impl BitcoinTap {
             path,
             debug,
             pid_source,
-            quit_tx,
         }
     }
 
@@ -109,239 +95,13 @@ impl BitcoinTap {
     }
 
     /// Attach to the process and start reading events
-    pub fn attach(mut self) -> Result<Self, RuntimeError> {
+    pub fn attach(self) -> Result<Self, RuntimeError> {
         let pid = bitcoind_pid(&self.pid_source)?;
+        let debug = self.debug;
+        let tx = self.tx.clone();
+        let path = self.path.clone();
 
-        let mut skel_builder = tracing::TracingSkelBuilder::default();
-        skel_builder.obj_builder.debug(self.debug);
-
-        let mut uninit = MaybeUninit::uninit();
-        log::info!("Opening BPF skeleton with debug={}..", self.debug);
-        let open_skel: tracing::OpenTracingSkel = skel_builder.open(&mut uninit)?;
-        log::info!("Loading BPF functions and maps into kernel..");
-        let skel: tracing::TracingSkel = open_skel.load()?;
-        let obj = skel.object();
-
-        let mut active_tracepoints = vec![];
-        let mut ringbuff_builder = RingBufferBuilder::new();
-
-        // P2P net msgs tracepoints
-        let map_net_msg_small = find_map(&obj, "net_msg_small")?;
-        let map_net_msg_medium = find_map(&obj, "net_msg_medium")?;
-        let map_net_msg_large = find_map(&obj, "net_msg_large")?;
-        let map_net_msg_huge = find_map(&obj, "net_msg_huge")?;
-
-        // net tracepoints
-        {
-            // TODO: selectively enable these
-            active_tracepoints.extend(&TRACEPOINTS_NET_MESSAGE);
-
-            let mut tx2 = self.tx.clone();
-            ringbuff_builder.add(&map_net_msg_small, move |data| {
-                handle_net_message(data, &mut tx2)
-            })?;
-
-            let mut tx2 = self.tx.clone();
-            ringbuff_builder.add(&map_net_msg_medium, move |data| {
-                handle_net_message(data, &mut tx2)
-            })?;
-
-            let mut tx2 = self.tx.clone();
-            ringbuff_builder.add(&map_net_msg_large, move |data| {
-                handle_net_message(data, &mut tx2)
-            })?;
-
-            let mut tx2 = self.tx.clone();
-            ringbuff_builder.add(&map_net_msg_huge, move |data| {
-                handle_net_message(data, &mut tx2)
-            })?;
-        }
-
-        // P2P connection tracepoints
-        let map_net_conn_inbound = find_map(&obj, "net_conn_inbound")?;
-        let map_net_conn_outbound = find_map(&obj, "net_conn_outbound")?;
-        let map_net_conn_closed = find_map(&obj, "net_conn_closed")?;
-        let map_net_conn_inbound_evicted = find_map(&obj, "net_conn_inbound_evicted")?;
-        let map_net_conn_misbehaving = find_map(&obj, "net_conn_misbehaving")?;
-
-        // connection tracepoints
-        {
-            // TODO: select individual connection tracepoints
-            active_tracepoints.extend(&TRACEPOINTS_NET_CONN);
-
-            let mut tx2 = self.tx.clone();
-            ringbuff_builder.add(&map_net_conn_inbound, move |data| {
-                handle_net_conn_inbound(data, &mut tx2)
-            })?;
-
-            let mut tx2 = self.tx.clone();
-            ringbuff_builder.add(&map_net_conn_outbound, move |data| {
-                handle_net_conn_outbound(data, &mut tx2)
-            })?;
-
-            let mut tx2 = self.tx.clone();
-            ringbuff_builder.add(&map_net_conn_closed, move |data| {
-                handle_net_conn_closed(data, &mut tx2)
-            })?;
-
-            let mut tx2 = self.tx.clone();
-            ringbuff_builder.add(&map_net_conn_inbound_evicted, move |data| {
-                handle_net_conn_inbound_evicted(data, &mut tx2)
-            })?;
-
-            let mut tx2 = self.tx.clone();
-            ringbuff_builder.add(&map_net_conn_misbehaving, move |data| {
-                handle_net_conn_misbehaving(data, &mut tx2)
-            })?;
-        }
-
-        // validation tracepoints
-        let map_validation_block_connected = find_map(&obj, "validation_block_connected")?;
-        {
-            // TODO: select validation tracepoints
-            active_tracepoints.extend(&TRACEPOINTS_VALIDATION);
-            let mut tx2 = self.tx.clone();
-            ringbuff_builder.add(&map_validation_block_connected, move |data| {
-                handle_validation_block_connected(data, &mut tx2)
-            })?;
-        }
-
-        // mempool tracepoints
-        let map_mempool_added = find_map(&obj, "mempool_added")?;
-        let map_mempool_removed = find_map(&obj, "mempool_removed")?;
-        let map_mempool_rejected = find_map(&obj, "mempool_rejected")?;
-        let map_mempool_replaced = find_map(&obj, "mempool_replaced")?;
-        {
-            // TODO: select mempool tracepoints
-            active_tracepoints.extend(&TRACEPOINTS_MEMPOOL);
-
-            let mut tx2 = self.tx.clone();
-            ringbuff_builder.add(&map_mempool_added, move |data| {
-                handle_mempool_added(data, &mut tx2)
-            })?;
-
-            let mut tx2 = self.tx.clone();
-            ringbuff_builder.add(&map_mempool_removed, move |data| {
-                handle_mempool_removed(data, &mut tx2)
-            })?;
-
-            let mut tx2 = self.tx.clone();
-            ringbuff_builder.add(&map_mempool_rejected, move |data| {
-                handle_mempool_rejected(data, &mut tx2)
-            })?;
-
-            let mut tx2 = self.tx.clone();
-            ringbuff_builder.add(&map_mempool_replaced, move |data| {
-                handle_mempool_replaced(data, &mut tx2)
-            })?;
-        }
-
-        // addrman tracepoints
-        /*
-        let map_addrman_insert_new = find_map(&obj, "addrman_insert_new")?;
-        let map_addrman_insert_tried = find_map(&obj, "addrman_insert_tried")?;
-        {
-            // TODO: select addrman tracepoints
-            active_tracepoints.extend(&TRACEPOINTS_ADDRMAN);
-
-            let mut tx2 = self.tx.clone();
-            ringbuff_builder.add(&map_addrman_insert_new, move |data| {
-                handle_addrman_new(data, &mut tx2)
-            })?;
-
-            let mut tx2 = self.tx.clone();
-            ringbuff_builder.add(&map_addrman_insert_tried, move |data| {
-                handle_addrman_tried(data, &mut tx2)
-            })?;
-        }
-        */
-
-        log::info!("active tracepoints: {:?}", &active_tracepoints);
-        if active_tracepoints.is_empty() {
-            log::error!("No tracepoints enabled.");
-            return Ok(self);
-        }
-
-        // attach tracepoints
-        let mut _links = Vec::new();
-        for tracepoint in active_tracepoints {
-            let prog = find_prog_mut(&obj, tracepoint.function)?;
-            _links.push(prog.attach_usdt(pid, &self.path, tracepoint.context, tracepoint.name)?);
-            log::info!(
-                "hooked the BPF script function {} up to the tracepoint {}:{} of '{}' with PID={}",
-                tracepoint.function,
-                tracepoint.context,
-                tracepoint.name,
-                &self.path.display(),
-                pid
-            );
-        }
-
-        log::info!(
-            "Startup successful. Starting to extract events from '{}'..",
-            self.path.display()
-        );
-        let mut last_event_timestamp = SystemTime::now();
-        let mut has_warned_about_no_events = false;
-        let (quit_tx, quit_rx) = mpsc::channel();
-        self.quit_tx = Some(quit_tx);
-        let ring_buffers = ringbuff_builder.build()?;
-
-        std::thread::spawn(move || {
-            // TODO: epoll async somehow ?
-            loop {
-                if let Ok(()) = quit_rx.try_recv() {
-                    break;
-                }
-
-                match ring_buffers.poll_raw(Duration::from_millis(100)) {
-                    RINGBUFF_CALLBACK_OK => (),
-                    RINGBUFF_CALLBACK_PUBLISH_ERROR => {
-                        log::warn!("Could not publish to event queue.")
-                    }
-                    RINGBUFF_CALLBACK_UNABLE_TO_PARSE_P2P_MSG => {
-                        log::warn!("Could not parse P2P message.")
-                    }
-                    RINGBUFF_CALLBACK_SYSTEM_TIME_ERROR => log::warn!("SystemTimeError"),
-                    _other => {
-                        // values >0 are the number of handled events
-                        if _other <= 0 {
-                            log::warn!("Unhandled ringbuffer callback error: {}", _other)
-                        } else {
-                            last_event_timestamp = SystemTime::now();
-                            has_warned_about_no_events = false;
-                            log::trace!(
-                                "Extracted {} events from ring buffers and published them",
-                                _other
-                            );
-                        }
-                    }
-                };
-                let duration_since_last_event = SystemTime::now()
-                    .duration_since(last_event_timestamp)
-                    .expect("time went backwards");
-                if duration_since_last_event >= NO_EVENTS_ERROR_DURATION {
-                    log::error!(
-                        "No events received in the last {:?}.",
-                        NO_EVENTS_ERROR_DURATION
-                    );
-                    log::warn!(
-                        "The bitcoind process might be down, has restarted and changed PIDs, or the network might be down."
-                    );
-                    log::warn!("The extractor will exit. Please restart it");
-                } else if duration_since_last_event >= NO_EVENTS_WARN_DURATION
-                    && !has_warned_about_no_events
-                {
-                    has_warned_about_no_events = true;
-                    log::warn!(
-                        "No events received in the last {:?}. Is bitcoind or the network down?",
-                        NO_EVENTS_WARN_DURATION
-                    );
-                }
-            }
-
-            log::info!("Exiting event polling loop");
-        });
+        std::thread::spawn(move || ebpf_thread(pid, debug, tx, path));
 
         Ok(self)
     }
@@ -513,5 +273,233 @@ pub fn find_map<'obj>(object: &'obj Object, name: &str) -> Result<Map<'obj>, Run
     match object.maps().find(|map| map.name() == name) {
         Some(map) => Ok(map),
         None => Err(RuntimeError::NoSuchBPFMap(name.to_string())),
+    }
+}
+
+fn ebpf_thread(
+    pid: i32,
+    debug: bool,
+    tx: mpsc::Sender<EventMsg>,
+    path: PathBuf,
+) -> Result<(), RuntimeError> {
+    let mut skel_builder = tracing::TracingSkelBuilder::default();
+    skel_builder.obj_builder.debug(debug);
+
+    let mut uninit = MaybeUninit::uninit();
+    log::info!("Opening BPF skeleton with debug={}..", debug);
+    let open_skel: tracing::OpenTracingSkel = skel_builder.open(&mut uninit).unwrap();
+    log::info!("Loading BPF functions and maps into kernel..");
+    let skel: tracing::TracingSkel = open_skel.load()?;
+    let obj = skel.object();
+
+    let mut active_tracepoints = vec![];
+    let mut ringbuff_builder = RingBufferBuilder::new();
+
+    // P2P net msgs tracepoints
+    let map_net_msg_small = find_map(&obj, "net_msg_small")?;
+    let map_net_msg_medium = find_map(&obj, "net_msg_medium")?;
+    let map_net_msg_large = find_map(&obj, "net_msg_large")?;
+    let map_net_msg_huge = find_map(&obj, "net_msg_huge")?;
+
+    // net tracepoints
+    {
+        // TODO: selectively enable these
+        active_tracepoints.extend(&TRACEPOINTS_NET_MESSAGE);
+
+        let mut tx2 = tx.clone();
+        ringbuff_builder.add(&map_net_msg_small, move |data| {
+            handle_net_message(data, &mut tx2)
+        })?;
+
+        let mut tx2 = tx.clone();
+        ringbuff_builder.add(&map_net_msg_medium, move |data| {
+            handle_net_message(data, &mut tx2)
+        })?;
+
+        let mut tx2 = tx.clone();
+        ringbuff_builder.add(&map_net_msg_large, move |data| {
+            handle_net_message(data, &mut tx2)
+        })?;
+
+        let mut tx2 = tx.clone();
+        ringbuff_builder.add(&map_net_msg_huge, move |data| {
+            handle_net_message(data, &mut tx2)
+        })?;
+    }
+
+    // P2P connection tracepoints
+    let map_net_conn_inbound = find_map(&obj, "net_conn_inbound")?;
+    let map_net_conn_outbound = find_map(&obj, "net_conn_outbound")?;
+    let map_net_conn_closed = find_map(&obj, "net_conn_closed")?;
+    let map_net_conn_inbound_evicted = find_map(&obj, "net_conn_inbound_evicted")?;
+    let map_net_conn_misbehaving = find_map(&obj, "net_conn_misbehaving")?;
+
+    // connection tracepoints
+    {
+        // TODO: select individual connection tracepoints
+        active_tracepoints.extend(&TRACEPOINTS_NET_CONN);
+
+        let mut tx2 = tx.clone();
+        ringbuff_builder.add(&map_net_conn_inbound, move |data| {
+            handle_net_conn_inbound(data, &mut tx2)
+        })?;
+
+        let mut tx2 = tx.clone();
+        ringbuff_builder.add(&map_net_conn_outbound, move |data| {
+            handle_net_conn_outbound(data, &mut tx2)
+        })?;
+
+        let mut tx2 = tx.clone();
+        ringbuff_builder.add(&map_net_conn_closed, move |data| {
+            handle_net_conn_closed(data, &mut tx2)
+        })?;
+
+        let mut tx2 = tx.clone();
+        ringbuff_builder.add(&map_net_conn_inbound_evicted, move |data| {
+            handle_net_conn_inbound_evicted(data, &mut tx2)
+        })?;
+
+        let mut tx2 = tx.clone();
+        ringbuff_builder.add(&map_net_conn_misbehaving, move |data| {
+            handle_net_conn_misbehaving(data, &mut tx2)
+        })?;
+    }
+
+    // validation tracepoints
+    let map_validation_block_connected = find_map(&obj, "validation_block_connected")?;
+    {
+        // TODO: select validation tracepoints
+        active_tracepoints.extend(&TRACEPOINTS_VALIDATION);
+        let mut tx2 = tx.clone();
+        ringbuff_builder.add(&map_validation_block_connected, move |data| {
+            handle_validation_block_connected(data, &mut tx2)
+        })?;
+    }
+
+    // mempool tracepoints
+    let map_mempool_added = find_map(&obj, "mempool_added")?;
+    let map_mempool_removed = find_map(&obj, "mempool_removed")?;
+    let map_mempool_rejected = find_map(&obj, "mempool_rejected")?;
+    let map_mempool_replaced = find_map(&obj, "mempool_replaced")?;
+    {
+        // TODO: select mempool tracepoints
+        active_tracepoints.extend(&TRACEPOINTS_MEMPOOL);
+
+        let mut tx2 = tx.clone();
+        ringbuff_builder.add(&map_mempool_added, move |data| {
+            handle_mempool_added(data, &mut tx2)
+        })?;
+
+        let mut tx2 = tx.clone();
+        ringbuff_builder.add(&map_mempool_removed, move |data| {
+            handle_mempool_removed(data, &mut tx2)
+        })?;
+
+        let mut tx2 = tx.clone();
+        ringbuff_builder.add(&map_mempool_rejected, move |data| {
+            handle_mempool_rejected(data, &mut tx2)
+        })?;
+
+        let mut tx2 = tx.clone();
+        ringbuff_builder.add(&map_mempool_replaced, move |data| {
+            handle_mempool_replaced(data, &mut tx2)
+        })?;
+    }
+
+    // addrman tracepoints
+    /*
+    let map_addrman_insert_new = find_map(&obj, "addrman_insert_new")?;
+    let map_addrman_insert_tried = find_map(&obj, "addrman_insert_tried")?;
+    {
+        // TODO: select addrman tracepoints
+        active_tracepoints.extend(&TRACEPOINTS_ADDRMAN);
+
+        let mut tx2 = tx.clone();
+        ringbuff_builder.add(&map_addrman_insert_new, move |data| {
+            handle_addrman_new(data, &mut tx2)
+        })?;
+
+        let mut tx2 = tx.clone();
+        ringbuff_builder.add(&map_addrman_insert_tried, move |data| {
+            handle_addrman_tried(data, &mut tx2)
+        })?;
+    }
+    */
+
+    log::info!("active tracepoints: {:?}", &active_tracepoints);
+    if active_tracepoints.is_empty() {
+        log::error!("No tracepoints enabled.");
+        return Ok(());
+    }
+
+    // attach tracepoints
+    let mut _links = Vec::new();
+    for tracepoint in active_tracepoints {
+        let prog = find_prog_mut(&obj, tracepoint.function)?;
+        _links.push(prog.attach_usdt(pid, &path, tracepoint.context, tracepoint.name)?);
+        log::info!(
+            "hooked the BPF script function {} up to the tracepoint {}:{} of '{}' with PID={}",
+            tracepoint.function,
+            tracepoint.context,
+            tracepoint.name,
+            &path.display(),
+            pid
+        );
+    }
+
+    log::info!(
+        "Startup successful. Starting to extract events from '{}'..",
+        path.display()
+    );
+    let mut last_event_timestamp = SystemTime::now();
+    let mut has_warned_about_no_events = false;
+    let ring_buffers = ringbuff_builder.build()?;
+
+    // TODO: epoll async somehow ?
+    loop {
+        match ring_buffers.poll_raw(Duration::from_millis(100)) {
+            RINGBUFF_CALLBACK_OK => (),
+            RINGBUFF_CALLBACK_PUBLISH_ERROR => {
+                log::warn!("Could not publish to event queue.")
+            }
+            RINGBUFF_CALLBACK_UNABLE_TO_PARSE_P2P_MSG => {
+                log::warn!("Could not parse P2P message.")
+            }
+            RINGBUFF_CALLBACK_SYSTEM_TIME_ERROR => log::warn!("SystemTimeError"),
+            _other => {
+                // values >0 are the number of handled events
+                if _other <= 0 {
+                    log::warn!("Unhandled ringbuffer callback error: {}", _other)
+                } else {
+                    last_event_timestamp = SystemTime::now();
+                    has_warned_about_no_events = false;
+                    log::trace!(
+                        "Extracted {} events from ring buffers and published them",
+                        _other
+                    );
+                }
+            }
+        };
+        let duration_since_last_event = SystemTime::now()
+            .duration_since(last_event_timestamp)
+            .expect("time went backwards");
+        if duration_since_last_event >= NO_EVENTS_ERROR_DURATION {
+            log::error!(
+                "No events received in the last {:?}.",
+                NO_EVENTS_ERROR_DURATION
+            );
+            log::warn!(
+                "The bitcoind process might be down, has restarted and changed PIDs, or the network might be down."
+            );
+            log::warn!("The extractor will exit. Please restart it");
+        } else if duration_since_last_event >= NO_EVENTS_WARN_DURATION
+            && !has_warned_about_no_events
+        {
+            has_warned_about_no_events = true;
+            log::warn!(
+                "No events received in the last {:?}. Is bitcoind or the network down?",
+                NO_EVENTS_WARN_DURATION
+            );
+        }
     }
 }
