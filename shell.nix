@@ -10,6 +10,7 @@ pkgs.mkShell {
       #rustc
       #cargo
       cmake
+      gdb
       protobuf
 
       rustfmt

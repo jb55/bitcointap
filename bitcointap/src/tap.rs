@@ -34,10 +34,10 @@ pub struct BitcoinTap {
     pid_source: PidSource,
 
     /// The queue that you read events off of
-    rx: Receiver<EventMsg>,
+    rx: Receiver<TapMsg>,
 
     /// All tapped events are sent over this channel
-    tx: Sender<EventMsg>,
+    tx: Sender<TapMsg>,
 
     /// Do we have libbpf debugging enabled ?
     debug: bool,
@@ -60,6 +60,25 @@ impl Default for PidSource {
     }
 }
 
+#[derive(Debug)]
+pub enum TapMsg {
+    /// The tap thread has been detached. Call attach again to restart.
+    Detached,
+
+    /// There was an error when attaching
+    Error(RuntimeError),
+
+    /// An event from the tap thread
+    Event(EventMsg),
+}
+
+impl TapMsg {
+    #[inline]
+    fn event(event_msg: EventMsg) -> Self {
+        TapMsg::Event(event_msg)
+    }
+}
+
 impl BitcoinTap {
     /// Create a new bitcoin tap. Attach by calling [`Self::attach`]
     pub fn new(path: impl AsRef<Path>) -> Self {
@@ -78,7 +97,7 @@ impl BitcoinTap {
     }
 
     /// The event stream
-    pub fn events(&mut self) -> &mut Receiver<EventMsg> {
+    pub fn events(&mut self) -> &mut Receiver<TapMsg> {
         &mut self.rx
     }
 
@@ -101,7 +120,13 @@ impl BitcoinTap {
         let tx = self.tx.clone();
         let path = self.path.clone();
 
-        std::thread::spawn(move || ebpf_thread(pid, debug, tx, path));
+        std::thread::spawn(move || {
+            let tx2 = tx.clone();
+            if let Err(err) = ebpf_thread(pid, debug, tx2, path) {
+                let _ = tx.send(TapMsg::Error(err));
+                let _ = tx.send(TapMsg::Detached);
+            }
+        });
 
         Ok(self)
     }
@@ -136,48 +161,48 @@ fn bitcoind_pid(method: &PidSource) -> Result<i32, RuntimeError> {
     }
 }
 
-fn handle_net_conn_closed(data: &[u8], tx: &mut mpsc::Sender<EventMsg>) -> i32 {
+fn handle_net_conn_closed(data: &[u8], tx: &mut mpsc::Sender<TapMsg>) -> i32 {
     let closed = ClosedConnection::from_bytes(data);
-    tx.send(EventMsg::new(Event::Conn(ConnectionMsg {
+    tx.send(TapMsg::event(EventMsg::new(Event::Conn(ConnectionMsg {
         event: Some(ConnectionEvent::Closed(closed.into())),
-    })))
+    }))))
     .map_or(RINGBUFF_CALLBACK_PUBLISH_ERROR, |_| RINGBUFF_CALLBACK_OK)
 }
 
-fn handle_net_conn_outbound(data: &[u8], tx: &mut mpsc::Sender<EventMsg>) -> i32 {
+fn handle_net_conn_outbound(data: &[u8], tx: &mut mpsc::Sender<TapMsg>) -> i32 {
     log::info!("outbound conn!!");
     let outbound = OutboundConnection::from_bytes(data);
-    tx.send(EventMsg::new(Event::Conn(ConnectionMsg {
+    tx.send(TapMsg::event(EventMsg::new(Event::Conn(ConnectionMsg {
         event: Some(ConnectionEvent::Outbound(outbound.into())),
-    })))
+    }))))
     .map_or(RINGBUFF_CALLBACK_PUBLISH_ERROR, |_| RINGBUFF_CALLBACK_OK)
 }
 
-fn handle_net_conn_inbound(data: &[u8], tx: &mut mpsc::Sender<EventMsg>) -> i32 {
+fn handle_net_conn_inbound(data: &[u8], tx: &mut mpsc::Sender<TapMsg>) -> i32 {
     let inbound = InboundConnection::from_bytes(data);
-    tx.send(EventMsg::new(Event::Conn(ConnectionMsg {
+    tx.send(TapMsg::event(EventMsg::new(Event::Conn(ConnectionMsg {
         event: Some(ConnectionEvent::Inbound(inbound.into())),
-    })))
+    }))))
     .map_or(RINGBUFF_CALLBACK_PUBLISH_ERROR, |_| RINGBUFF_CALLBACK_OK)
 }
 
-fn handle_net_conn_inbound_evicted(data: &[u8], tx: &mut mpsc::Sender<EventMsg>) -> i32 {
+fn handle_net_conn_inbound_evicted(data: &[u8], tx: &mut mpsc::Sender<TapMsg>) -> i32 {
     let evicted = ClosedConnection::from_bytes(data);
-    tx.send(EventMsg::new(Event::Conn(ConnectionMsg {
+    tx.send(TapMsg::event(EventMsg::new(Event::Conn(ConnectionMsg {
         event: Some(ConnectionEvent::InboundEvicted(evicted.into())),
-    })))
+    }))))
     .map_or(RINGBUFF_CALLBACK_PUBLISH_ERROR, |_| RINGBUFF_CALLBACK_OK)
 }
 
-fn handle_net_conn_misbehaving(data: &[u8], tx: &mpsc::Sender<EventMsg>) -> i32 {
+fn handle_net_conn_misbehaving(data: &[u8], tx: &mpsc::Sender<TapMsg>) -> i32 {
     let misbehaving = MisbehavingConnection::from_bytes(data);
-    tx.send(EventMsg::new(Event::Conn(ConnectionMsg {
+    tx.send(TapMsg::event(EventMsg::new(Event::Conn(ConnectionMsg {
         event: Some(ConnectionEvent::Misbehaving(misbehaving.into())),
-    })))
+    }))))
     .map_or(RINGBUFF_CALLBACK_PUBLISH_ERROR, |_| RINGBUFF_CALLBACK_OK)
 }
 
-fn handle_net_message(data: &[u8], tx: &mpsc::Sender<EventMsg>) -> i32 {
+fn handle_net_message(data: &[u8], tx: &mpsc::Sender<TapMsg>) -> i32 {
     let message = P2PMessage::from_bytes(data);
     let protobuf_message = match message.decode_to_protobuf_network_message() {
         Ok(msg) => msg.into(),
@@ -186,10 +211,10 @@ fn handle_net_message(data: &[u8], tx: &mpsc::Sender<EventMsg>) -> i32 {
             return RINGBUFF_CALLBACK_UNABLE_TO_PARSE_P2P_MSG;
         }
     };
-    tx.send(EventMsg::new(Event::Msg(net_msg::Message {
+    tx.send(TapMsg::event(EventMsg::new(Event::Msg(net_msg::Message {
         meta: message.meta.create_protobuf_metadata(),
         msg: Some(protobuf_message),
-    })))
+    }))))
     .map_or(RINGBUFF_CALLBACK_PUBLISH_ERROR, |_| RINGBUFF_CALLBACK_OK)
 }
 
@@ -217,43 +242,47 @@ fn handle_addrman_tried(data: &[u8], tx: &mut mpsc::Sender<EventMsg>) -> i32 {
 }
 */
 
-fn handle_mempool_added(data: &[u8], tx: &mut mpsc::Sender<EventMsg>) -> i32 {
+fn handle_mempool_added(data: &[u8], tx: &mut mpsc::Sender<TapMsg>) -> i32 {
     let added = MempoolAdded::from_bytes(data);
-    tx.send(EventMsg::new(Event::Mempool(MempoolMsg {
+    tx.send(TapMsg::event(EventMsg::new(Event::Mempool(MempoolMsg {
         event: Some(MempoolEvent::Added(added.into())),
-    })))
+    }))))
     .map_or(RINGBUFF_CALLBACK_PUBLISH_ERROR, |_| RINGBUFF_CALLBACK_OK)
 }
 
-fn handle_mempool_removed(data: &[u8], tx: &mut mpsc::Sender<EventMsg>) -> i32 {
+fn handle_mempool_removed(data: &[u8], tx: &mut mpsc::Sender<TapMsg>) -> i32 {
     let removed = MempoolRemoved::from_bytes(data);
-    tx.send(EventMsg::new(Event::Mempool(MempoolMsg {
+    tx.send(TapMsg::event(EventMsg::new(Event::Mempool(MempoolMsg {
         event: Some(MempoolEvent::Removed(removed.into())),
-    })))
+    }))))
     .map_or(RINGBUFF_CALLBACK_PUBLISH_ERROR, |_| RINGBUFF_CALLBACK_OK)
 }
 
-fn handle_mempool_replaced(data: &[u8], tx: &mut mpsc::Sender<EventMsg>) -> i32 {
+fn handle_mempool_replaced(data: &[u8], tx: &mut mpsc::Sender<TapMsg>) -> i32 {
     let replaced = MempoolReplaced::from_bytes(data);
-    tx.send(EventMsg::new(Event::Mempool(mempool::MempoolEvent {
-        event: Some(mempool::mempool_event::Event::Replaced(replaced.into())),
-    })))
+    tx.send(TapMsg::event(EventMsg::new(Event::Mempool(
+        mempool::MempoolEvent {
+            event: Some(mempool::mempool_event::Event::Replaced(replaced.into())),
+        },
+    ))))
     .map_or(RINGBUFF_CALLBACK_PUBLISH_ERROR, |_| RINGBUFF_CALLBACK_OK)
 }
 
-fn handle_mempool_rejected(data: &[u8], tx: &mut Sender<EventMsg>) -> i32 {
+fn handle_mempool_rejected(data: &[u8], tx: &mut Sender<TapMsg>) -> i32 {
     let rejected = MempoolRejected::from_bytes(data);
-    tx.send(EventMsg::new(Event::Mempool(MempoolMsg {
+    tx.send(TapMsg::event(EventMsg::new(Event::Mempool(MempoolMsg {
         event: Some(MempoolEvent::Rejected(rejected.into())),
-    })))
+    }))))
     .map_or(RINGBUFF_CALLBACK_PUBLISH_ERROR, |_| RINGBUFF_CALLBACK_OK)
 }
 
-fn handle_validation_block_connected(data: &[u8], tx: &mut mpsc::Sender<EventMsg>) -> i32 {
+fn handle_validation_block_connected(data: &[u8], tx: &mut mpsc::Sender<TapMsg>) -> i32 {
     let connected = ValidationBlockConnected::from_bytes(data);
-    tx.send(EventMsg::new(Event::Validation(ValidationMsg {
-        event: Some(ValidationEvent::BlockConnected(connected.into())),
-    })))
+    tx.send(TapMsg::event(EventMsg::new(Event::Validation(
+        ValidationMsg {
+            event: Some(ValidationEvent::BlockConnected(connected.into())),
+        },
+    ))))
     .map_or(RINGBUFF_CALLBACK_PUBLISH_ERROR, |_| RINGBUFF_CALLBACK_OK)
 }
 
@@ -279,7 +308,7 @@ pub fn find_map<'obj>(object: &'obj Object, name: &str) -> Result<Map<'obj>, Run
 fn ebpf_thread(
     pid: i32,
     debug: bool,
-    tx: mpsc::Sender<EventMsg>,
+    tx: mpsc::Sender<TapMsg>,
     path: PathBuf,
 ) -> Result<(), RuntimeError> {
     let mut skel_builder = tracing::TracingSkelBuilder::default();

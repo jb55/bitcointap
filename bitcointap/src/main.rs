@@ -1,6 +1,6 @@
 #![cfg_attr(feature = "strict", deny(warnings))]
 
-use bitcointap::{BitcoinTap, PidSource, RuntimeError};
+use bitcointap::{BitcoinTap, PidSource, RuntimeError, TapMsg};
 use clap::{Parser, arg, command};
 use shared::log;
 use std::path::PathBuf;
@@ -62,7 +62,11 @@ fn run() -> Result<(), RuntimeError> {
         .attach()?;
 
     while let Ok(ev) = &tap.events().recv() {
-        println!("{}", serde_json::to_string(ev).expect("json msg"));
+        match ev {
+            TapMsg::Event(ev) => println!("{}", serde_json::to_string(ev).expect("json msg")),
+            TapMsg::Error(err) => log::error!("{err}"),
+            TapMsg::Detached => break,
+        }
     }
 
     log::info!("DONE!");
