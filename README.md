@@ -17,10 +17,59 @@ This is currently a WORK IN PROGRESS, but it works(ish)!
 ## Usage
 
 ```bash
-$ bitcointap mempool:added 
-{"txid":"b89b342d8be5d07ca41f6f9c5c8a3b9b7a3262f0e802910ccc79f89bf4b625fa", ...}
-{"txid":"1013d5ceaac615e7ac330b3422530d58d49ccef1cff10cf2a89615be91cea27e", ...}
-...
+$ sudo bitcointap
+{
+  "timestamp": 1747158913,
+  "timestamp_subsec_micros": 356600,
+  "event": {
+    "Msg": {
+      "meta": {
+        "peer_id": 11,
+        "addr": "111.100.246.24:8333",
+        "conn_type": 2,
+        "command": "inv",
+        "inbound": true,
+        "size": 37
+      },
+      "msg": { "Inv": { "items": [ { "item": { "Wtx": [..] } } ] } }
+    }
+  }
+}
+{
+  "timestamp": 1747158913,
+  "timestamp_subsec_micros": 356608,
+  "event": {
+    "Msg": {
+      "meta": {
+        "peer_id": 11,
+        "addr": "111.100.246.24:8333",
+        "conn_type": 2,
+        "command": "getdata",
+        "inbound": false,
+        "size": 37
+      },
+      "msg": { "Getdata": { "items": [ { "item": { "Wtx": [ ... ] } } ] } }
+    }
+  }
+}
+{
+  "timestamp": 1747158913,
+  "timestamp_subsec_micros": 408313,
+  "event": {
+    "Msg": {
+      "meta": {
+        "peer_id": 12,
+        "addr": "bvymttfo4axni5n2lfu5y3ymhxmsmkatynmc4sthyutjujbyjft47cqd.onion:8333",
+        "conn_type": 2,
+        "command": "inv",
+        "inbound": true,
+        "size": 73
+      },
+      "msg": { "Inv": { "items": [ { "item": { "Wtx": [ .. ] } }, { "item": { "Wtx": [ ... ] } } ] }
+      }
+    }
+  }
+}
 ```
 
 ## How it works
