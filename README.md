@@ -12,6 +12,8 @@ This is currently a WORK IN PROGRESS, but it works(ish)!
 - [x] json logger from channel
 - [ ] event selection api
 - [ ] event selection from cli
+- [ ] rust lib docs
+- [ ] rust lib example
 
 ## Usage
 
