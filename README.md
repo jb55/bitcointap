@@ -5,7 +5,7 @@ extract data in realtime.
 
 ## Status
 
-This is current WORK IN PROGRESS. It does not work yet.
+This is currently a WORK IN PROGRESS, but it works(ish)!
 
 - [x] switch from nats to mpsc channel
 - [x] cli tool with json events
